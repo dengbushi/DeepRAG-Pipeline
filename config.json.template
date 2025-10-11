@@ -1,0 +1,33 @@
+{
+  "llm": {
+    "provider": "deepseek",
+    "api_key": "YOUR_DEEPSEEK_API_KEY_HERE",
+    "base_url": "https://api.deepseek.com/v1",
+    "model_name": "deepseek-chat",
+    "max_tokens": 8192,
+    "temperature": 0.3,
+    "timeout": 120
+  },
+  "search": {
+    "engine": "deep_search",
+    "serper_api_key": "YOUR_SERPER_API_KEY_HERE",
+    "jina_api_key": "YOUR_JINA_API_KEY_HERE",
+    "max_results": 15,
+    "min_rounds": 2,
+    "max_rounds": 8,
+    "max_urls_per_step": 10,
+    "token_budget": 80000,
+    "allow_early_termination": true
+  },
+  "cache": {
+    "enabled": true,
+    "ttl": 3600,
+    "max_size": 1000
+  },
+  "log": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file": "logs/rag_system.log"
+  },
+  "debug": false
+}

@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+
+{% block title %}DeepRAG Pipeline{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-comments me-2"></i>智能问答聊天
+                </h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary me-2" onclick="clearChat()">
+                        <i class="fas fa-trash me-1"></i>清空
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="toggleSettings()">
+                        <i class="fas fa-cog me-1"></i>设置
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 设置面板 -->
+            <div id="settingsPanel" class="card-body border-bottom" style="display: none;">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">使用缓存</label>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="useCache" checked>
+                            <label class="form-check-label" for="useCache">启用</label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">显示详情</label>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="showDetails">
+                            <label class="form-check-label" for="showDetails">启用</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 聊天区域 -->
+            <div class="card-body" style="height: 500px; overflow-y: auto;" id="chatArea">
+                <div class="text-center text-muted py-5">
+                    <i class="fas fa-robot fa-3x mb-3"></i>
+                    <p>你好！我是智能助手，有什么问题可以问我。</p>
+                    <div class="d-flex flex-wrap justify-content-center gap-2 mt-3">
+                        <button class="btn btn-sm btn-outline-primary" onclick="askSample('什么是人工智能？')">
+                            什么是人工智能？
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="askSample('Python有什么特点？')">
+                            Python有什么特点？
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="askSample('如何学习机器学习？')">
+                            如何学习机器学习？
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 输入区域 -->
+            <div class="card-footer">
+                <form onsubmit="sendMessage(event)" class="d-flex gap-2">
+                    <input type="text" class="form-control" id="messageInput" 
+                           placeholder="输入你的问题..." required>
+                    <button type="submit" class="btn btn-primary" id="sendBtn">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </form>
+                <small class="text-muted">按 Enter 发送消息</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Marked.js for Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+    let chatHistory = [];
+    let messageCounter = 0;
+
+    // 脚注后处理函数
+    function postProcessFootnotes(html) {
+        // 只处理脚注引用 [^1] -> <sup>[1]</sup>，但不处理脚注定义 [^1]:
+        html = html.replace(/\[\^(\d+)\](?!:)/g, '<sup style="color: #0d6efd; cursor: pointer;">[$1]</sup>');
+        
+        // 处理参考来源部分的换行 - 更精确的匹配
+        // 匹配 [^数字]: 开头到下一个 [^数字]: 之前的所有内容
+        html = html.replace(/(\[\^\d+\]:[^\n]*?)(?=\s*\[\^\d+\]:)/g, '$1<br><br>');
+        
+        // 处理最后一个脚注定义，确保末尾有换行
+        html = html.replace(/(\[\^\d+\]:[^\n]*?)(?=\s*$)/g, '$1<br>');
+        
+        return html;
+    }
+
+    // 发送消息
+    async function sendMessage(event) {
+        event.preventDefault();
+        
+        const input = document.getElementById('messageInput');
+        const question = input.value.trim();
+        
+        if (!question) return;
+        
+        // 清空输入框
+        input.value = '';
+        
+        // 添加用户消息
+        addMessage('user', question);
+        
+        // 显示加载状态
+        const loadingId = addMessage('assistant', '', true);
+        
+        try {
+            const useCache = document.getElementById('useCache').checked;
+            const showDetails = document.getElementById('showDetails').checked;
+            
+            const response = await axios.post('/api/ask', {
+                question: question,
+                use_cache: useCache
+            });
+            
+            // 移除加载消息
+            removeMessage(loadingId);
+            
+            if (response.data.success) {
+                const data = response.data.data;
+                addMessage('assistant', data.answer, false, data, showDetails);
+                
+                // 保存到历史记录
+                chatHistory.push({
+                    question: question,
+                    answer: data.answer,
+                    data: data,
+                    timestamp: new Date()
+                });
+            } else {
+                addMessage('assistant', '抱歉，处理您的问题时出现错误：' + response.data.error);
+            }
+        } catch (error) {
+            removeMessage(loadingId);
+            addMessage('assistant', '网络请求失败，请稍后重试。');
+            console.error('Chat error:', error);
+        }
+    }
+
+    // 添加消息
+    function addMessage(sender, content, isLoading = false, data = null, showDetails = false) {
+        const chatArea = document.getElementById('chatArea');
+        const messageId = 'msg-' + (++messageCounter);
+        
+        // 如果是第一条消息，清除欢迎信息
+        if (messageCounter === 1) {
+            chatArea.innerHTML = '';
+        }
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.id = messageId;
+        messageDiv.className = `d-flex mb-3 ${sender === 'user' ? 'justify-content-end' : 'justify-content-start'}`;
+        
+        if (isLoading) {
+            messageDiv.innerHTML = `
+                <div class="card border-0 bg-light" style="max-width: 70%;">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                            <small class="text-muted">正在思考...</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            const bgClass = sender === 'user' ? 'bg-primary text-white' : 'bg-light';
+            const avatar = sender === 'user' ? 'fas fa-user' : 'fas fa-robot';
+            
+            // 渲染Markdown内容
+            let renderedContent = content;
+            if (sender === 'assistant' && content) {
+                try {
+                    renderedContent = marked.parse(content);
+                    // 应用脚注后处理
+                    renderedContent = postProcessFootnotes(renderedContent);
+                } catch (e) {
+                    console.warn('Markdown渲染失败:', e);
+                    renderedContent = content.replace(/\n/g, '<br>');
+                }
+            } else {
+                renderedContent = content.replace(/\n/g, '<br>');
+            }
+            
+            let messageContent = `
+                <div class="card border-0 ${bgClass}" style="max-width: 70%;">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex align-items-start">
+                            <i class="${avatar} me-2 mt-1"></i>
+                            <div class="flex-grow-1">
+                                <div class="markdown-content">${renderedContent}</div>
+            `;
+            
+            // 如果是助手回答且有详细数据，显示额外信息
+            if (sender === 'assistant' && data && showDetails) {
+                const confidencePercent = Math.round(data.confidence * 100);
+                const confidenceColor = confidencePercent >= 70 ? 'success' : 
+                                       confidencePercent >= 40 ? 'warning' : 'danger';
+                
+                messageContent += `
+                    <div class="mt-2 pt-2 border-top border-secondary">
+                        <small class="opacity-75">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span>置信度: ${confidencePercent}%</span>
+                                <span>耗时: ${data.processing_time.toFixed(2)}s</span>
+                            </div>
+                            <div class="progress" style="height: 4px;">
+                                <div class="progress-bar bg-${confidenceColor}" style="width: ${confidencePercent}%"></div>
+                            </div>
+                            ${data.cached ? '<div class="mt-1"><i class="fas fa-memory me-1"></i>使用缓存</div>' : ''}
+                            ${data.search_results.length > 0 ? `<div class="mt-1"><i class="fas fa-search me-1"></i>搜索到 ${data.search_results.length} 个结果</div>` : ''}
+                        </small>
+                    </div>
+                `;
+            }
+            
+            messageContent += `
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            messageDiv.innerHTML = messageContent;
+        }
+        
+        chatArea.appendChild(messageDiv);
+        chatArea.scrollTop = chatArea.scrollHeight;
+        
+        return messageId;
+    }
+
+    // 移除消息
+    function removeMessage(messageId) {
+        const messageDiv = document.getElementById(messageId);
+        if (messageDiv) {
+            messageDiv.remove();
+        }
+    }
+
+    // 清空聊天
+    function clearChat() {
+        if (confirm('确定要清空聊天记录吗？')) {
+            const chatArea = document.getElementById('chatArea');
+            chatArea.innerHTML = `
+                <div class="text-center text-muted py-5">
+                    <i class="fas fa-robot fa-3x mb-3"></i>
+                    <p>聊天记录已清空，有什么问题可以问我。</p>
+                </div>
+            `;
+            chatHistory = [];
+            messageCounter = 0;
+        }
+    }
+
+    // 切换设置面板
+    function toggleSettings() {
+        const panel = document.getElementById('settingsPanel');
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+
+    // 示例问题
+    function askSample(question) {
+        document.getElementById('messageInput').value = question;
+        sendMessage(new Event('submit'));
+    }
+
+    // 键盘快捷键
+    document.getElementById('messageInput').addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage(event);
+        }
+    });
+
+    // 自动聚焦输入框
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('messageInput').focus();
+    });
+</script>
+
+<style>
+    /* Markdown样式 */
+    .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+        font-weight: bold;
+    }
+    
+    .markdown-content h1 {
+        font-size: 1.5rem;
+        border-bottom: 2px solid #dee2e6;
+        padding-bottom: 0.3rem;
+    }
+    
+    .markdown-content h2 {
+        font-size: 1.3rem;
+        color: #495057;
+    }
+    
+    .markdown-content h3 {
+        font-size: 1.1rem;
+        color: #6c757d;
+    }
+    
+    .markdown-content p {
+        margin-bottom: 0.8rem;
+        line-height: 1.6;
+    }
+    
+    .markdown-content ul, .markdown-content ol {
+        margin-bottom: 0.8rem;
+        padding-left: 1.5rem;
+    }
+    
+    .markdown-content li {
+        margin-bottom: 0.3rem;
+    }
+    
+    .markdown-content strong {
+        font-weight: bold;
+        color: #212529;
+    }
+    
+    .markdown-content code {
+        background-color: #f8f9fa;
+        padding: 0.2rem 0.4rem;
+        border-radius: 0.25rem;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+    }
+    
+    .markdown-content pre {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin-bottom: 1rem;
+    }
+    
+    .markdown-content blockquote {
+        border-left: 4px solid #dee2e6;
+        padding-left: 1rem;
+        margin: 1rem 0;
+        color: #6c757d;
+        font-style: italic;
+    }
+    
+    .markdown-content a {
+        color: #0d6efd;
+        text-decoration: none;
+    }
+    
+    .markdown-content a:hover {
+        text-decoration: underline;
+    }
+    
+    /* 脚注引用样式 */
+    .markdown-content sup {
+        font-size: 0.75rem;
+        color: #0d6efd;
+        font-weight: bold;
+        cursor: pointer;
+        margin-left: 0.1rem;
+        transition: color 0.2s ease;
+    }
+    
+    .markdown-content sup:hover {
+        color: #0056b3;
+        text-decoration: underline;
+    }
+    
+    /* 参考来源部分样式 */
+    .markdown-content p {
+        line-height: 1.6;
+    }
+</style>
+{% endblock %}
