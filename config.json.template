@@ -11,12 +11,13 @@
   "search": {
     "engine": "deep_search",
     "serper_api_key": "YOUR_SERPER_API_KEY_HERE",
-    "jina_api_key": "YOUR_JINA_API_KEY_HERE",
-    "max_results": 15,
-    "min_rounds": 2,
+    "max_results_per_query": 15,
     "max_rounds": 8,
-    "max_urls_per_step": 10,
+    "max_total_queries": 12,
+    "max_urls_to_scrape_per_query": 10,
     "token_budget": 80000,
+    "report_context_max_chars": 12000,
+    "evidence_similarity_threshold": 0.35,
     "allow_early_termination": true
   },
   "cache": {

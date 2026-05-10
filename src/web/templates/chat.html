@@ -206,6 +206,44 @@
                 const confidencePercent = Math.round(data.confidence * 100);
                 const confidenceColor = confidencePercent >= 70 ? 'success' : 
                                        confidencePercent >= 40 ? 'warning' : 'danger';
+
+                // 渲染节点执行过程（steps_log）
+                let stepsHtml = '';
+                if (Array.isArray(data.steps_log) && data.steps_log.length > 0) {
+                    const stepItems = data.steps_log.map((s, idx) => {
+                        const action = s.action || 'unknown';
+                        const step = (s.step !== undefined && s.step !== null) ? s.step : idx;
+                        const round = (s.round !== undefined && s.round !== null) ? `第${s.round}轮` : '';
+                        let detail = '';
+
+                        if (action === 'search') {
+                            detail = `query: ${s.query || ''} | results: ${s.results_count ?? ''}`;
+                        } else if (action === 'visit') {
+                            const urlCount = Array.isArray(s.urls) ? s.urls.length : 0;
+                            detail = `urls: ${urlCount} | ok: ${s.results_count ?? ''}`;
+                        } else if (action === 'reflect') {
+                            detail = `new: ${s.new_questions_count ?? ''}` + (s.early_termination ? ' | sufficient' : '');
+                        } else {
+                            detail = JSON.stringify(s);
+                        }
+
+                        return `
+                            <div class="step-item">
+                                <div class="d-flex justify-content-between">
+                                    <span><strong>#${step}</strong> ${round} <span class="badge bg-secondary">${action}</span></span>
+                                </div>
+                                <div class="step-detail">${detail}</div>
+                            </div>
+                        `;
+                    }).join('');
+
+                    stepsHtml = `
+                        <details class="mt-2">
+                            <summary class="text-muted" style="cursor: pointer;">执行过程（节点步骤）</summary>
+                            <div class="steps-panel mt-2">${stepItems}</div>
+                        </details>
+                    `;
+                }
                 
                 messageContent += `
                     <div class="mt-2 pt-2 border-top border-secondary">
@@ -219,6 +257,8 @@
                             </div>
                             ${data.cached ? '<div class="mt-1"><i class="fas fa-memory me-1"></i>使用缓存</div>' : ''}
                             ${data.search_results.length > 0 ? `<div class="mt-1"><i class="fas fa-search me-1"></i>搜索到 ${data.search_results.length} 个结果</div>` : ''}
+                            ${typeof data.total_steps === 'number' ? `<div class="mt-1"><i class="fas fa-route me-1"></i>总步骤: ${data.total_steps}</div>` : ''}
+                            ${stepsHtml}
                         </small>
                     </div>
                 `;
@@ -383,6 +423,28 @@
     /* 参考来源部分样式 */
     .markdown-content p {
         line-height: 1.6;
+    }
+
+    /* 节点执行过程样式 */
+    .steps-panel {
+        background: rgba(0, 0, 0, 0.03);
+        border-radius: 8px;
+        padding: 10px;
+    }
+
+    .step-item {
+        padding: 6px 8px;
+        border-left: 3px solid #667eea;
+        background: #fff;
+        border-radius: 6px;
+        margin-bottom: 6px;
+    }
+
+    .step-detail {
+        font-size: 0.85rem;
+        color: #6c757d;
+        margin-top: 2px;
+        word-break: break-word;
     }
 </style>
 {% endblock %}

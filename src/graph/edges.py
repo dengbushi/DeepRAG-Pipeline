@@ -21,15 +21,21 @@ def route_action(state: Dict[str, Any]) -> Literal["search", "visit", "reflect",
         下一个节点名称
     """
     # 检查提前终止
-    completed_rounds = state.get("completed_rounds", 0)
-    min_rounds = state.get("min_rounds", 1)
     if state.get("early_termination", False):
-        if completed_rounds >= min_rounds:
-            logger.info("路由: 提前终止 → 生成报告")
-            return "generate_report"
-        logger.info(
-            f"路由: 提前终止但仅完成 {completed_rounds}/{min_rounds} 轮，继续执行"
-        )
+        logger.info("路由: 提前终止 → 生成报告")
+        return "generate_report"
+
+    # 检查报告准备状态
+    if state.get("report_ready", False):
+        logger.info("路由: 已满足报告条件 → 生成报告")
+        return "generate_report"
+
+    # 检查累计查询预算
+    completed_queries = len(state.get("completed_queries", []))
+    max_total_queries = state.get("max_total_queries", 6)
+    if completed_queries >= max_total_queries:
+        logger.info(f"路由: 达到最大查询数({max_total_queries}) → 生成报告")
+        return "generate_report"
     
     # 检查最大步骤数
     max_steps = state.get("max_steps", 8)
@@ -56,11 +62,6 @@ def route_action(state: Dict[str, Any]) -> Literal["search", "visit", "reflect",
         logger.info("路由: 反思")
         return "reflect"
     elif action == "answer":
-        if completed_rounds < min_rounds:
-            logger.info(
-                f"路由: 未达到最小轮次 {min_rounds}，忽略生成报告请求，继续搜索"
-            )
-            return "search"
         logger.info("路由: 生成报告")
         return "generate_report"
     else:

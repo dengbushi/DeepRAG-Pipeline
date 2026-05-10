@@ -4,12 +4,13 @@
 研究报告生成代理
 """
 
+import re
 import logging
 from typing import List, Dict, Any, Optional
 from .base import BaseAgent
 from ..llm.base import BaseLLM
 from ..search.serper_search import SerperSearchResult
-from ..search.jina_reader import JinaReaderResult
+from ..search.web_reader import WebReaderResult
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +48,27 @@ class ResearchAgent(BaseAgent):
         """
         search_results = kwargs.get('search_results', [])
         content_results = kwargs.get('content_results', [])
+        selected_contexts = kwargs.get('selected_contexts', [])
+        structured_context = kwargs.get('structured_context', '')
+        source_registry = kwargs.get('source_registry', [])
         
-        return await self.generate_research_report(question, search_results, content_results)
+        return await self.generate_research_report(
+            question,
+            search_results,
+            content_results,
+            selected_contexts=selected_contexts,
+            structured_context=structured_context,
+            source_registry=source_registry,
+        )
     
     async def generate_research_report(
         self, 
         question: str, 
         search_results: List[SerperSearchResult], 
-        content_results: List[JinaReaderResult]
+        content_results: List[WebReaderResult],
+        selected_contexts: Optional[List[Dict[str, Any]]] = None,
+        structured_context: str = "",
+        source_registry: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         生成结构化研究报告
@@ -68,25 +82,29 @@ class ResearchAgent(BaseAgent):
             结构化研究报告
         """
         try:
-            # 构建研究上下文
-            context = self._build_research_context(search_results, content_results)
+            max_context_length = 12000
+            references = self._collect_references(search_results, content_results, source_registry or [])
+            context = self._build_research_context(
+                search_results,
+                content_results,
+                selected_contexts or [],
+                structured_context,
+                references,
+                max_chars=max_context_length,
+            )
             
             if not context.strip():
                 return f"抱歉，没有找到关于 '{question}' 的相关信息来生成研究报告。"
-            
-            # 限制上下文长度（避免触发内容审核）
-            max_context_length = 10000
-            if len(context) > max_context_length:
-                logger.warning(f"上下文过长（{len(context)}字符），截取到{max_context_length}字符")
-                context = context[:max_context_length] + "\n\n...(内容已截断)"
-            
-            # 使用BaseAgent的标准方法调用LLM
+
             logger.info(f"开始生成研究报告，问题: {question}")
             logger.info(f"上下文长度: {len(context)} 字符")
-            
-            # 创建消息并调用LLM
-            messages = self.create_messages(question, context)
-            report = await self.invoke_llm(messages)
+
+            outline = await self._generate_outline(question, context)
+            body = await self._generate_body(question, outline, context)
+            body = self._strip_reference_section(body)
+            used_references = self._select_used_references(body, references)
+            references_text = self._build_reference_section(used_references)
+            report = f"{body}\n\n{references_text}".strip()
             
             logger.info(f"研究报告生成完成，长度: {len(report)} 字符")
             return report
@@ -98,103 +116,216 @@ class ResearchAgent(BaseAgent):
     def _build_research_context(
         self, 
         search_results: List[SerperSearchResult], 
-        content_results: List[JinaReaderResult]
+        content_results: List[WebReaderResult],
+        selected_contexts: List[Dict[str, Any]],
+        structured_context: str,
+        references: List[Dict[str, Any]],
+        max_chars: int = 12000,
     ) -> str:
         """构建研究上下文"""
-        context_parts = []
-        source_mapping = {}  # URL到编号的映射
-        reference_list = []  # 引用列表
-        ref_counter = 1
+        context_parts: List[str] = []
+        source_mapping = {ref['url']: ref['number'] for ref in references if ref.get('url')}
+        current_length = 0
+
+        def append_block(block: str) -> bool:
+            nonlocal current_length
+            text = (block or '').strip()
+            if not text:
+                return True
+
+            candidate = text if not context_parts else f"\n\n{text}"
+            remaining = max_chars - current_length
+            if remaining <= 0:
+                return False
+
+            if len(candidate) <= remaining:
+                context_parts.append(text)
+                current_length += len(candidate)
+                return True
+
+            minimum_useful = min(240, max(remaining - 20, 0))
+            if minimum_useful < 120:
+                return False
+
+            trimmed = candidate[:minimum_useful].rstrip()
+            if not trimmed:
+                return False
+            if context_parts and trimmed.startswith("\n\n"):
+                trimmed = trimmed[2:]
+            if not trimmed:
+                return False
+            context_parts.append(trimmed + "\n...(内容已压缩)")
+            current_length = max_chars
+            return False
+
+        compact_references = references[: min(len(references), 12)]
+        if references and len(references) > len(compact_references):
+            logger.info(f"来源较多，压缩来源索引展示: {len(compact_references)}/{len(references)}")
         
-        # 添加搜索结果摘要
-        if search_results:
-            context_parts.append("## 搜索结果摘要")
-            for i, result in enumerate(search_results, 1):
+        if structured_context:
+            if not append_block("## 精选证据\n" + structured_context):
+                return "\n\n".join(context_parts)
+
+        if compact_references:
+            reference_lines = ["## 可用引用来源"]
+            for ref in compact_references:
+                title = self._truncate_text(ref['title'], 80)
+                reference_lines.append(f"[^{ref['number']}] {title}")
+            if len(references) > len(compact_references):
+                reference_lines.append(f"... 其余 {len(references) - len(compact_references)} 个来源可继续使用相同编号规则引用")
+            if not append_block("\n".join(reference_lines)):
+                return "\n\n".join(context_parts)
+
+        include_context_fragments = not structured_context or len(structured_context) < max_chars // 3
+        if include_context_fragments and selected_contexts:
+            fragment_lines = ["## 关键上下文片段"]
+            for i, item in enumerate(selected_contexts[:5], 1):
+                source_url = item.get('source_url', '未知URL')
+                ref_num = source_mapping.get(source_url)
+                ref_suffix = f" [^{ref_num}]" if ref_num else ""
+                fragment_lines.append(f"[{i}] {self._truncate_text(item.get('source_title', '未知标题'), 80)}{ref_suffix} | score={item.get('score', 0):.3f}")
+                fragment_lines.append(self._truncate_text(item.get('text', ''), 500))
+            if not append_block("\n".join(fragment_lines)):
+                return "\n\n".join(context_parts)
+
+        use_fallback_material = not structured_context and len(selected_contexts) < 3
+
+        if use_fallback_material and search_results:
+            search_lines = ["## 搜索结果摘要"]
+            for i, result in enumerate(search_results[:6], 1):
                 try:
-                    # 处理搜索结果对象
                     if hasattr(result, 'title'):
-                        # 为每个来源分配引用编号
-                        if result.url not in source_mapping:
-                            source_mapping[result.url] = ref_counter
-                            reference_list.append({
-                                'number': ref_counter,
-                                'title': result.title,
-                                'url': result.url
-                            })
-                            ref_counter += 1
-                        
-                        ref_num = source_mapping[result.url]
-                        context_parts.append(f"**来源[^{ref_num}]: {result.title}**")
-                        context_parts.append(f"   URL: {result.url}")
+                        ref_num = source_mapping.get(result.url)
+                        title_line = f"**来源[^{ref_num}]: {result.title}**" if ref_num else f"**来源: {result.title}**"
+                        search_lines.append(title_line)
                         if hasattr(result, 'snippet') and result.snippet:
-                            context_parts.append(f"   摘要: {result.snippet}")
+                            search_lines.append(f"   摘要: {self._truncate_text(result.snippet, 280)}")
                     else:
-                        # 如果是字符串或其他格式，直接使用
-                        context_parts.append(f"{i}. {str(result)}")
-                    context_parts.append("")
+                        search_lines.append(f"{i}. {self._truncate_text(str(result), 280)}")
                 except Exception as e:
                     logger.warning(f"处理搜索结果 {i} 时出错: {e}")
-                    context_parts.append(f"{i}. [处理错误的搜索结果]")
-                    context_parts.append("")
+                    search_lines.append(f"{i}. [处理错误的搜索结果]")
+            if not append_block("\n".join(search_lines)):
+                return "\n\n".join(context_parts)
         
-        # 添加详细网页内容
-        if content_results:
+        if use_fallback_material and content_results:
             successful_content = [r for r in content_results if hasattr(r, 'success') and r.success and hasattr(r, 'content') and r.content]
             if successful_content:
-                context_parts.append("## 详细网页内容")
-                for i, result in enumerate(successful_content, 1):
+                content_lines = ["## 补充网页内容"]
+                for i, result in enumerate(successful_content[:4], 1):
                     try:
                         title = getattr(result, 'title', '未知标题')
                         url = getattr(result, 'url', '未知URL')
                         content = getattr(result, 'content', '')
-                        
-                        # 为每个来源分配引用编号
-                        if url not in source_mapping:
-                            source_mapping[url] = ref_counter
-                            reference_list.append({
-                                'number': ref_counter,
-                                'title': title,
-                                'url': url
-                            })
-                            ref_counter += 1
-                        
-                        ref_num = source_mapping[url]
-                        context_parts.append(f"### 来源[^{ref_num}]: {title}")
-                        context_parts.append(f"URL: {url}")
-                        
-                        # 截取内容前2000字符避免过长
+
+                        ref_num = source_mapping.get(url)
+                        title_line = f"### 来源[^{ref_num}]: {title}" if ref_num else f"### 来源: {title}"
+                        content_lines.append(title_line)
+
                         if content:
-                            content_preview = content[:2000]
-                            if len(content) > 2000:
-                                content_preview += "..."
-                            context_parts.append(f"内容: {content_preview}")
-                        context_parts.append("")
+                            content_lines.append(f"内容: {self._truncate_text(content, 900)}")
                     except Exception as e:
                         logger.warning(f"处理内容结果 {i} 时出错: {e}")
-                        context_parts.append(f"### 来源 {i}: [处理错误的内容结果]")
-                        context_parts.append("")
+                        content_lines.append(f"### 来源 {i}: [处理错误的内容结果]")
+                append_block("\n".join(content_lines))
         
-        # 添加引用指导和参考列表
-        if reference_list:
-            context_parts.append("## 引用编号对应表")
-            for ref in reference_list:
-                context_parts.append(f"[^{ref['number']}]: {ref['title']} - {ref['url']}")
-            context_parts.append("")
-            
-            context_parts.append("## 重要引用指导")
-            context_parts.append("1. 在报告中引用信息时，请在相关内容后添加引用编号，如：某个观点[^1]")
-            context_parts.append("2. 在报告末尾添加'参考来源'部分，按编号列出所有引用")
-            context_parts.append("3. 确保每个重要信息都有对应的引用，让读者知道信息来源")
-            context_parts.append("4. 引用格式：[^编号]: 网站标题 - URL")
-            context_parts.append("")
-            
-            # 提供引用示例
-            context_parts.append("## 引用格式示例")
-            context_parts.append("正文中：ChatGPT是基于Transformer架构的大型语言模型[^1]。")
-            context_parts.append("参考来源部分：[^1]: OpenAI官网 - https://openai.com/chatgpt")
-        
-        return "\n".join(context_parts)
+        return "\n\n".join(context_parts)
     
+    async def _generate_outline(self, question: str, context: str) -> str:
+        prompt = (
+            f"研究问题：{question}\n\n"
+            f"证据上下文：\n{context[:8000]}\n\n"
+            "请生成一个结构化研究报告大纲，使用 Markdown 标题，包含：概述、关键发现、详细分析、结论。不要输出‘参考来源’章节标题。"
+        )
+        messages = self.create_messages(prompt)
+        return await self.invoke_llm(messages, temperature=0.2)
+
+    async def _generate_body(self, question: str, outline: str, context: str) -> str:
+        prompt = (
+            f"研究问题：{question}\n\n"
+            f"报告大纲：\n{outline}\n\n"
+            f"证据上下文：\n{context[:10000]}\n\n"
+            "请根据大纲生成完整研究报告正文，要求使用 Markdown。"
+            "正文必须包含‘概述’‘关键发现’‘详细分析’‘结论’几个部分，并让‘详细分析’成为篇幅最长的部分。"
+            "请尽量综合多个来源展开分析、比较概念差异、说明发展脉络与应用影响，而不是只做简短摘要。"
+            "关键信息附带引用标记 [^n]，引用编号只能使用上下文中给出的来源编号。"
+            "不要输出‘参考来源’或参考文献列表，这部分将由系统在正文后统一追加。"
+            "避免编造，若证据不足则明确说明局限。"
+        )
+        messages = self.create_messages(prompt)
+        return await self.invoke_llm(messages, temperature=0.2)
+
+    def _collect_references(self, search_results: List[SerperSearchResult], content_results: List[WebReaderResult], source_registry: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        references = []
+        seen = set()
+
+        for item in source_registry:
+            url = item.get('url', '')
+            title = item.get('title', '')
+            if url and url not in seen:
+                seen.add(url)
+                references.append({'title': title or url, 'url': url})
+
+        for result in search_results:
+            title = getattr(result, 'title', '')
+            url = getattr(result, 'url', '')
+            if url and url not in seen:
+                seen.add(url)
+                references.append({'title': title or url, 'url': url})
+
+        for result in content_results:
+            title = getattr(result, 'title', '')
+            url = getattr(result, 'url', '')
+            success = getattr(result, 'success', False)
+            if success and url and url not in seen:
+                seen.add(url)
+                references.append({'title': title or url, 'url': url})
+
+        for index, ref in enumerate(references, 1):
+            ref['number'] = index
+
+        return references
+
+    def _build_reference_section(self, references: List[Dict[str, Any]]) -> str:
+        if not references:
+            return "## 参考来源\n\n暂无可用来源。"
+
+        lines = ["## 参考来源", ""]
+        for ref in references:
+            lines.append(f"[^{ref['number']}]: {ref['title']} - {ref['url']}")
+        return "\n".join(lines)
+
+    def _strip_reference_section(self, body: str) -> str:
+        markers = ["\n## 参考来源", "\n# 参考来源", "\n参考来源"]
+        cleaned = body.strip()
+        for marker in markers:
+            position = cleaned.find(marker)
+            if position != -1:
+                cleaned = cleaned[:position].rstrip()
+        return cleaned
+
+    def _truncate_text(self, text: str, limit: int) -> str:
+        normalized = " ".join((text or '').split())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: max(0, limit - 3)].rstrip() + "..."
+
+    def _select_used_references(self, body: str, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        used_numbers = self._extract_reference_numbers(body)
+        if not used_numbers:
+            return references[: min(8, len(references))]
+        return [ref for ref in references if ref.get('number') in used_numbers]
+
+    def _extract_reference_numbers(self, body: str) -> List[int]:
+        found = []
+        seen = set()
+        for match in re.finditer(r"\[\^(\d+)\]", body or ""):
+            number = int(match.group(1))
+            if number in seen:
+                continue
+            seen.add(number)
+            found.append(number)
+        return found
     
     def get_info(self) -> Dict[str, Any]:
         """获取代理信息"""

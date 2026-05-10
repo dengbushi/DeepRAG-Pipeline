@@ -11,7 +11,7 @@ from ..config import AppConfig, config_manager
 from ..llm.factory import LLMFactory
 from ..agents.agent_manager import AgentManager
 from ..search.serper_search import SerperSearchEngine
-from ..search.jina_reader import JinaReader
+from ..search.web_reader import WebReader
 from ..graph.workflow import ResearchWorkflow
 from ..search.cache import SearchCache
 from .pipeline import RAGPipeline, RAGResult
@@ -28,7 +28,7 @@ class RAGSystem:
         self.llm = None
         self.agent_manager = None
         self.serper_engine = None
-        self.jina_reader = None
+        self.web_reader = None
         self.workflow = None
         self.cache = None
         self.pipeline = None
@@ -66,20 +66,19 @@ class RAGSystem:
             if serper_api_key and serper_api_key != "YOUR_SERPER_API_KEY_HERE":
                 self.serper_engine = SerperSearchEngine(
                     api_key=serper_api_key,
-                    max_results=search_config.get('max_results', 10)
+                    max_results=search_config.get('max_results_per_query', search_config.get('max_results', 10))
                 )
                 logger.info("Serper搜索引擎初始化完成")
             
-            # 初始化Jina Reader
-            jina_api_key = search_config.get('jina_api_key')
-            self.jina_reader = JinaReader(api_key=jina_api_key)
-            logger.info("Jina Reader初始化完成")
+            # 初始化网页读取器
+            self.web_reader = WebReader()
+            logger.info("Web Reader初始化完成")
             
             # 初始化LangGraph工作流
             self.workflow = ResearchWorkflow(
                 agent_manager=self.agent_manager,
                 serper_engine=self.serper_engine,
-                jina_reader=self.jina_reader,
+                web_reader=self.web_reader,
                 config=self.config.to_dict()
             )
             logger.info("LangGraph工作流初始化完成")
@@ -202,7 +201,7 @@ class RAGSystem:
                 "llm": self.llm is not None,
                 "agent_manager": self.agent_manager is not None,
                 "serper_engine": self.serper_engine is not None,
-                "jina_reader": self.jina_reader is not None,
+                "web_reader": self.web_reader is not None,
                 "workflow": self.workflow is not None,
                 "cache": self.cache is not None,
                 "pipeline": self.pipeline is not None

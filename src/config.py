@@ -9,8 +9,8 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass, asdict, field, fields
 
 @dataclass
 class LLMConfig:
@@ -27,13 +27,20 @@ class LLMConfig:
 class SearchConfig:
     """搜索配置"""
     engine: str = "deep_search"
-    max_results: int = 10
+    max_results_per_query: int = 10
+    retrievers: List[str] = field(default_factory=lambda: ["serper"])
     serper_api_key: Optional[str] = None
-    jina_api_key: Optional[str] = None
-    min_rounds: int = 1
     max_rounds: int = 2  # 最多搜索轮次（每轮包含SEARCH→VISIT→REFLECT）
-    max_urls_per_step: int = 3
+    max_total_queries: int = 6
+    max_urls_to_scrape_per_query: int = 3
     token_budget: int = 50000
+    context_top_k: int = 8
+    context_max_chars: int = 12000
+    report_context_max_chars: int = 9000
+    evidence_similarity_threshold: float = 0.35
+    chunk_size: int = 900
+    chunk_overlap: int = 120
+    max_planned_queries: int = 3
     # 步骤问题配置
     min_step_questions: int = 0  # 最少步骤问题数（0表示可以提前结束）
     max_step_questions: int = 5  # 最多步骤问题数
@@ -45,6 +52,10 @@ class CacheConfig:
     enabled: bool = True
     ttl: int = 3600  # 1小时
     max_size: int = 1000
+    search_ttl: int = 1800
+    content_ttl: int = 3600
+    planning_ttl: int = 1800
+    answer_ttl: int = 3600
 
 @dataclass
 class LogConfig:
@@ -61,17 +72,41 @@ class AppConfig:
     cache: CacheConfig
     log: LogConfig
     debug: bool = False
+    report: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'AppConfig':
         """从字典创建配置"""
+        search_data = cls._normalize_search_config(data.get('search', {}))
         return cls(
-            llm=LLMConfig(**data.get('llm', {})),
-            search=SearchConfig(**data.get('search', {})),
-            cache=CacheConfig(**data.get('cache', {})),
-            log=LogConfig(**data.get('log', {})),
-            debug=data.get('debug', False)
+            llm=LLMConfig(**cls._filter_dataclass_kwargs(LLMConfig, data.get('llm', {}))),
+            search=SearchConfig(**search_data),
+            cache=CacheConfig(**cls._filter_dataclass_kwargs(CacheConfig, data.get('cache', {}))),
+            log=LogConfig(**cls._filter_dataclass_kwargs(LogConfig, data.get('log', {}))),
+            debug=data.get('debug', False),
+            report=data.get('report', {})
         )
+
+    @staticmethod
+    def _filter_dataclass_kwargs(dataclass_type, values: Dict[str, Any]) -> Dict[str, Any]:
+        allowed = {item.name for item in fields(dataclass_type)}
+        return {key: value for key, value in (values or {}).items() if key in allowed}
+
+    @classmethod
+    def _normalize_search_config(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(values or {})
+
+        if 'max_results' in normalized and 'max_results_per_query' not in normalized:
+            normalized['max_results_per_query'] = normalized['max_results']
+        if 'max_urls_per_step' in normalized and 'max_urls_to_scrape_per_query' not in normalized:
+            normalized['max_urls_to_scrape_per_query'] = normalized['max_urls_per_step']
+        if 'context_max_chars' in normalized and 'report_context_max_chars' not in normalized:
+            normalized['report_context_max_chars'] = min(int(normalized['context_max_chars']), 9000)
+
+        normalized.pop('min_rounds', None)
+        normalized.pop('jina_api_key', None)
+
+        return cls._filter_dataclass_kwargs(SearchConfig, normalized)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -122,6 +157,28 @@ class ConfigManager:
                 'temperature': float(os.getenv('LLM_TEMPERATURE', '0.1'))
             }
         
+        search_overrides = {}
+        if os.getenv('SEARCH_RETRIEVERS'):
+            search_overrides['retrievers'] = [item.strip() for item in os.getenv('SEARCH_RETRIEVERS', '').split(',') if item.strip()]
+        if os.getenv('SEARCH_CONTEXT_TOP_K'):
+            search_overrides['context_top_k'] = int(os.getenv('SEARCH_CONTEXT_TOP_K', '8'))
+        if os.getenv('SEARCH_CONTEXT_MAX_CHARS'):
+            search_overrides['context_max_chars'] = int(os.getenv('SEARCH_CONTEXT_MAX_CHARS', '12000'))
+        if os.getenv('SEARCH_REPORT_CONTEXT_MAX_CHARS'):
+            search_overrides['report_context_max_chars'] = int(os.getenv('SEARCH_REPORT_CONTEXT_MAX_CHARS', '9000'))
+        if os.getenv('SEARCH_MAX_PLANNED_QUERIES'):
+            search_overrides['max_planned_queries'] = int(os.getenv('SEARCH_MAX_PLANNED_QUERIES', '3'))
+        if os.getenv('SEARCH_MAX_TOTAL_QUERIES'):
+            search_overrides['max_total_queries'] = int(os.getenv('SEARCH_MAX_TOTAL_QUERIES', '6'))
+        if os.getenv('SEARCH_MAX_RESULTS_PER_QUERY'):
+            search_overrides['max_results_per_query'] = int(os.getenv('SEARCH_MAX_RESULTS_PER_QUERY', '10'))
+        if os.getenv('SEARCH_MAX_URLS_TO_SCRAPE_PER_QUERY'):
+            search_overrides['max_urls_to_scrape_per_query'] = int(os.getenv('SEARCH_MAX_URLS_TO_SCRAPE_PER_QUERY', '3'))
+        if os.getenv('SEARCH_EVIDENCE_SIMILARITY_THRESHOLD'):
+            search_overrides['evidence_similarity_threshold'] = float(os.getenv('SEARCH_EVIDENCE_SIMILARITY_THRESHOLD', '0.35'))
+        if search_overrides:
+            env_config['search'] = {**env_config.get('search', {}), **search_overrides}
+
         # 其他环境变量
         if os.getenv('DEBUG'):
             env_config['debug'] = os.getenv('DEBUG').lower() == 'true'

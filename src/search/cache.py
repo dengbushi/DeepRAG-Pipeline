@@ -47,6 +47,14 @@ class SearchCache:
         # 使用MD5生成短键
         return hashlib.md5(key_data.encode()).hexdigest()
     
+    def get_by_namespace(self, namespace: str, query: str, **kwargs) -> Optional[Any]:
+        """按命名空间获取缓存"""
+        return self.get(f"{namespace}:{query}", **kwargs)
+
+    def set_by_namespace(self, namespace: str, query: str, data: Any, ttl: Optional[int] = None, **kwargs):
+        """按命名空间设置缓存"""
+        self.set(f"{namespace}:{query}", data, ttl=ttl, **kwargs)
+    
     def get(self, query: str, **kwargs) -> Optional[Any]:
         """获取缓存"""
         if not self.config.enabled:

@@ -20,7 +20,7 @@ class ResearchWorkflow:
         self,
         agent_manager,
         serper_engine,
-        jina_reader,
+        web_reader,
         config: Dict[str, Any]
     ):
         """
@@ -29,38 +29,33 @@ class ResearchWorkflow:
         Args:
             agent_manager: Agent管理器
             serper_engine: Serper搜索引擎
-            jina_reader: Jina Reader
+            web_reader: 网页读取器
             config: 系统配置
         """
         self.agent_manager = agent_manager
         self.serper_engine = serper_engine
-        self.jina_reader = jina_reader
+        self.web_reader = web_reader
         self.config = config
         
         # 创建图
         self.app = create_research_graph(
             agent_manager,
             serper_engine,
-            jina_reader,
+            web_reader,
             config
         )
         
         # 搜索配置
         search_config = config.get('search', {})
         self.max_rounds = search_config.get('max_rounds', 3)
-        self.min_rounds = search_config.get('min_rounds', 1)
-        if self.min_rounds < 1:
-            logger.warning("最小轮次配置小于1，自动调整为1")
-            self.min_rounds = 1
-        if self.min_rounds > self.max_rounds:
-            logger.warning("最小轮次大于最大轮次，自动调整为最大轮次")
-            self.min_rounds = self.max_rounds
+        self.max_total_queries = search_config.get('max_total_queries', 6)
+        self.report_context_max_chars = search_config.get('report_context_max_chars', min(search_config.get('context_max_chars', 12000), 9000))
         self.max_steps = 2 + 3 * (self.max_rounds - 1)
         self.token_budget = search_config.get('token_budget', 50000)
         
         logger.info(f"研究工作流初始化完成 (LangGraph)")
-        logger.info(f"  最小轮次: {self.min_rounds}")
         logger.info(f"  最大轮次: {self.max_rounds}")
+        logger.info(f"  最大查询数: {self.max_total_queries}")
         logger.info(f"  最大步骤: {self.max_steps}")
         logger.info(f"  Token预算: {self.token_budget}")
     
@@ -94,21 +89,28 @@ class ResearchWorkflow:
             "current_round": 0,
             "current_step": 0,
             "current_question": "",
-            "min_rounds": self.min_rounds,
             "max_rounds": self.max_rounds,
+            "max_total_queries": self.max_total_queries,
             "max_steps": self.max_steps,
             "completed_rounds": 0,
+            "report_context_max_chars": self.report_context_max_chars,
             
             # 累积数据
             "search_results": [],
             "content_results": [],
+            "source_registry": [],
             "all_context": [],
+            "selected_contexts": [],
             "steps_log": [],
+            "events": [],
             
             # 状态
             "step_questions": [],
             "visited_urls": [],
             "search_history": [],
+            "completed_queries": [],
+            "latest_evidence_count": 0,
+            "report_ready": False,
             
             # 控制流
             "next_action": "",
@@ -129,7 +131,8 @@ class ResearchWorkflow:
         
         try:
             # 执行图（设置递归限制）
-            config = {"recursion_limit": 50}  # 增加递归限制
+            recursion_limit = max(50, self.max_steps * 6)
+            config = {"recursion_limit": recursion_limit}
             final_state = await self.app.ainvoke(initial_state, config=config)
             
             # 计算处理时间
@@ -146,6 +149,7 @@ class ResearchWorkflow:
                 "search_results": final_state.get("search_results", []),
                 "content_results": final_state.get("content_results", []),
                 "steps_log": final_state.get("steps_log", []),
+                "observability_events": final_state.get("events", []),
                 "total_steps": final_state.get("current_step", 0),
                 "success": final_state.get("success", True),
                 "cached": False
@@ -174,6 +178,7 @@ class ResearchWorkflow:
                 "search_results": [],
                 "content_results": [],
                 "steps_log": [],
+                "observability_events": [],
                 "total_steps": 0,
                 "success": False,
                 "cached": False
@@ -204,17 +209,24 @@ class ResearchWorkflow:
             "current_round": 0,
             "current_step": 0,
             "current_question": "",
-            "min_rounds": self.min_rounds,
             "max_rounds": self.max_rounds,
+            "max_total_queries": self.max_total_queries,
             "max_steps": self.max_steps,
             "completed_rounds": 0,
+            "report_context_max_chars": self.report_context_max_chars,
             "search_results": [],
             "content_results": [],
+            "source_registry": [],
             "all_context": [],
+            "selected_contexts": [],
             "steps_log": [],
+            "events": [],
             "step_questions": [],
             "visited_urls": [],
             "search_history": [],
+            "completed_queries": [],
+            "latest_evidence_count": 0,
+            "report_ready": False,
             "next_action": "",
             "should_continue": True,
             "early_termination": False,

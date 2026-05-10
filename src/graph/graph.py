@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def create_research_graph(
     agent_manager,
     serper_engine,
-    jina_reader,
+    web_reader,
     config: Dict[str, Any]
 ):
     """
@@ -26,7 +26,7 @@ def create_research_graph(
     Args:
         agent_manager: Agent管理器
         serper_engine: Serper搜索引擎
-        jina_reader: Jina Reader
+        web_reader: 网页读取器
         config: 系统配置
         
     Returns:
@@ -35,7 +35,7 @@ def create_research_graph(
     logger.info("开始构建LangGraph研究工作流...")
     
     # 初始化节点
-    nodes = ResearchNodes(agent_manager, serper_engine, jina_reader, config)
+    nodes = ResearchNodes(agent_manager, serper_engine, web_reader, config)
     
     # 创建图
     workflow = StateGraph(ResearchState)

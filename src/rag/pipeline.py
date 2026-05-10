@@ -27,6 +27,7 @@ class RAGResult:
     search_results: List[Any] = None
     content_results: List[Any] = None
     steps_log: List[dict] = None
+    observability_events: List[dict] = None
     total_steps: int = 0
     success: bool = True
     
@@ -38,6 +39,8 @@ class RAGResult:
             self.content_results = []
         if self.steps_log is None:
             self.steps_log = []
+        if self.observability_events is None:
+            self.observability_events = []
     
     def _serialize_list(self, items: List[Any]) -> List[Any]:
         """序列化列表中的元素"""
@@ -64,6 +67,9 @@ class RAGResult:
             "cached": self.cached,
             "search_results": serialized_search,
             "content_results": serialized_content,
+            "steps_log": self.steps_log,
+            "observability_events": self.observability_events,
+            "total_steps": self.total_steps,
             "deep_search": {
                 "total_steps": self.total_steps,
                 "search_steps": len([s for s in self.steps_log if s.get("action") == "search"]),
@@ -101,7 +107,7 @@ class RAGPipeline:
         try:
             # 检查缓存
             if use_cache and self.cache:
-                cached_result = self.cache.get(question)
+                cached_result = self.cache.get_by_namespace("answer", question)
                 if cached_result:
                     logger.info("使用缓存结果")
                     cached_result.cached = True
@@ -130,13 +136,14 @@ class RAGPipeline:
                 search_results=workflow_result.get('search_results', []),
                 content_results=workflow_result.get('content_results', []),
                 steps_log=workflow_result.get('steps_log', []),
+                observability_events=workflow_result.get('observability_events', []),
                 total_steps=workflow_result.get('total_steps', 0),
                 success=workflow_result.get('success', True)
             )
             
             # 缓存结果
             if use_cache and self.cache:
-                self.cache.set(question, result)
+                self.cache.set_by_namespace("answer", question, result)
             
             logger.info(f"问题处理完成，耗时: {result.processing_time:.2f}s")
             return result
@@ -146,38 +153,18 @@ class RAGPipeline:
             import traceback
             traceback.print_exc()
             
-            # 降级处理：直接用QA代理回答
-            try:
-                fallback_answer = await self.agent_manager.answer_question(question)
-                
-                result = RAGResult(
-                    question=question,
-                    extracted_question=question,
-                    keywords="",
-                    answer=fallback_answer,
-                    confidence=0.3,
-                    processing_time=time.time() - start_time,
-                    cached=False
-                )
-                
-                logger.info("使用降级处理完成")
-                return result
-                
-            except Exception as fallback_error:
-                logger.error(f"降级处理也失败: {fallback_error}")
-                
-                # 最终降级：返回错误信息
-                result = RAGResult(
-                    question=question,
-                    extracted_question=question,
-                    keywords="",
-                    answer="抱歉，我无法处理这个问题。请稍后重试或重新表述您的问题。",
-                    confidence=0.0,
-                    processing_time=time.time() - start_time,
-                    cached=False
-                )
-                
-                return result
+            result = RAGResult(
+                question=question,
+                extracted_question=question,
+                keywords="",
+                answer="抱歉，我无法处理这个问题。请稍后重试或重新表述您的问题。",
+                confidence=0.0,
+                processing_time=time.time() - start_time,
+                cached=False,
+                success=False
+            )
+            
+            return result
     
     async def batch_process(
         self, 
@@ -207,7 +194,6 @@ class RAGPipeline:
                     question=question,
                     extracted_question=question,
                     keywords="",
-                    deep_search_result=None,
                     answer=f"处理失败: {str(e)}",
                     confidence=0.0,
                     processing_time=0.0,
