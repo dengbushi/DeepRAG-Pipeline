@@ -166,23 +166,7 @@ class ResearchWorkflow:
             logger.error(f"研究工作流执行失败: {e}")
             import traceback
             traceback.print_exc()
-            
-            # 返回错误结果
-            return {
-                "question": question,
-                "extracted_question": "",
-                "keywords": "",
-                "answer": f"研究失败: {str(e)}",
-                "confidence": 0.0,
-                "processing_time": time.time() - start_time,
-                "search_results": [],
-                "content_results": [],
-                "steps_log": [],
-                "observability_events": [],
-                "total_steps": 0,
-                "success": False,
-                "cached": False
-            }
+            raise
     
     async def stream(
         self,
@@ -240,10 +224,12 @@ class ResearchWorkflow:
         }
         
         try:
-            # 流式执行
-            async for chunk in self.app.astream(initial_state):
-                # 返回每个节点的输出
-                yield chunk
+            start_time = time.time()
+            recursion_limit = max(50, self.max_steps * 6)
+            config = {"recursion_limit": recursion_limit}
+            async for state in self.app.astream(initial_state, config=config, stream_mode="values"):
+                state["processing_time"] = time.time() - start_time
+                yield state
                 
         except Exception as e:
             logger.error(f"流式执行失败: {e}")

@@ -36,18 +36,19 @@ class QueryPlannerAgent(BaseAgent):
         )
         messages = self.create_messages(prompt)
         response = await self.invoke_llm(messages, temperature=0.2)
-        return self._parse_json_array(response, original_query, max_queries)
+        return self._parse_json_array(response, max_queries)
 
-    def _parse_json_array(self, response: str, original_query: str, max_queries: int) -> List[str]:
+    def _parse_json_array(self, response: str, max_queries: int) -> List[str]:
         try:
             start = response.find("[")
             end = response.rfind("]")
             if start != -1 and end != -1 and end > start:
                 data = json.loads(response[start : end + 1])
+                if not isinstance(data, list):
+                    raise ValueError("query planner 响应不是 JSON 数组")
                 queries = [str(item).strip() for item in data if str(item).strip()]
                 return queries[:max_queries]
         except Exception as e:
-            logger.warning(f"解析 query planner 响应失败: {e}")
+            raise ValueError(f"解析 query planner 响应失败: {e}") from e
 
-        fallback = [f"{original_query} 关键事实", f"{original_query} 最新进展"]
-        return fallback[:max_queries]
+        raise ValueError("query planner 响应缺少 JSON 数组")

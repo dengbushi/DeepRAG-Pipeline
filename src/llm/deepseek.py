@@ -105,7 +105,7 @@ class DeepSeekLLM(BaseLLM):
                         if response.status == 400:
                             logger.error("400错误可能原因:")
                             logger.error("1. 请求体格式错误")
-                            logger.error("2. max_tokens超出范围（应在1-8192之间）")
+                            logger.error("2. max_tokens超出当前模型允许范围（DeepSeek返回的有效范围以API错误信息为准）")
                             logger.error("3. 消息内容包含不支持的字符")
                             logger.error("4. 消息格式不符合要求")
                         

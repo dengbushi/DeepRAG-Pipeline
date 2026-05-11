@@ -66,8 +66,7 @@ class SerperSearchEngine:
             搜索结果列表
         """
         if not query.strip():
-            logger.warning("搜索查询为空")
-            return []
+            raise ValueError("搜索查询为空")
         
         # 使用指定的max_results或默认值
         num_results = max_results if max_results is not None else self.max_results
@@ -98,27 +97,24 @@ class SerperSearchEngine:
                         return results
                     
                     elif response.status == 401:
-                        logger.error("Serper API认证失败，请检查API密钥")
-                        return []
+                        raise RuntimeError("Serper API认证失败，请检查API密钥")
                     
                     elif response.status == 429:
-                        logger.error("Serper API请求频率限制，请稍后重试")
-                        return []
+                        raise RuntimeError("Serper API请求频率限制，请稍后重试")
                     
                     else:
                         error_text = await response.text()
-                        logger.error(f"Serper API请求失败，状态码: {response.status}, 错误: {error_text}")
-                        return []
+                        raise RuntimeError(f"Serper API请求失败，状态码: {response.status}, 错误: {error_text}")
                         
         except asyncio.TimeoutError:
             logger.error("Serper搜索请求超时")
-            return []
+            raise
         except aiohttp.ClientError as e:
             logger.error(f"Serper搜索网络错误: {e}")
-            return []
+            raise
         except Exception as e:
             logger.error(f"Serper搜索未知错误: {e}")
-            return []
+            raise
     
     def _parse_search_results(self, data: Dict[str, Any]) -> List[SerperSearchResult]:
         """
@@ -219,12 +215,12 @@ class SerperSearchEngine:
                         logger.info(f"Scholar搜索成功，获得 {len(results)} 个结果")
                         return results
                     else:
-                        logger.error(f"Scholar搜索失败，状态码: {response.status}")
-                        return []
+                        error_text = await response.text()
+                        raise RuntimeError(f"Scholar搜索失败，状态码: {response.status}, 错误: {error_text}")
                         
         except Exception as e:
             logger.error(f"Scholar搜索错误: {e}")
-            return []
+            raise
     
     def _parse_scholar_results(self, data: Dict[str, Any]) -> List[SerperSearchResult]:
         """解析Google Scholar搜索结果"""

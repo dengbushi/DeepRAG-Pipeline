@@ -81,37 +81,32 @@ class ResearchAgent(BaseAgent):
         Returns:
             结构化研究报告
         """
-        try:
-            max_context_length = 12000
-            references = self._collect_references(search_results, content_results, source_registry or [])
-            context = self._build_research_context(
-                search_results,
-                content_results,
-                selected_contexts or [],
-                structured_context,
-                references,
-                max_chars=max_context_length,
-            )
-            
-            if not context.strip():
-                return f"抱歉，没有找到关于 '{question}' 的相关信息来生成研究报告。"
+        max_context_length = 12000
+        references = self._collect_references(search_results, content_results, source_registry or [])
+        context = self._build_research_context(
+            search_results,
+            content_results,
+            selected_contexts or [],
+            structured_context,
+            references,
+            max_chars=max_context_length,
+        )
+        
+        if not context.strip():
+            raise ValueError(f"没有找到关于 '{question}' 的相关信息来生成研究报告")
 
-            logger.info(f"开始生成研究报告，问题: {question}")
-            logger.info(f"上下文长度: {len(context)} 字符")
+        logger.info(f"开始生成研究报告，问题: {question}")
+        logger.info(f"上下文长度: {len(context)} 字符")
 
-            outline = await self._generate_outline(question, context)
-            body = await self._generate_body(question, outline, context)
-            body = self._strip_reference_section(body)
-            used_references = self._select_used_references(body, references)
-            references_text = self._build_reference_section(used_references)
-            report = f"{body}\n\n{references_text}".strip()
-            
-            logger.info(f"研究报告生成完成，长度: {len(report)} 字符")
-            return report
-            
-        except Exception as e:
-            logger.error(f"研究报告生成失败: {e}")
-            return f"研究报告生成过程中出现错误: {str(e)}"
+        outline = await self._generate_outline(question, context)
+        body = await self._generate_body(question, outline, context)
+        body = self._strip_reference_section(body)
+        used_references = self._select_used_references(body, references)
+        references_text = self._build_reference_section(used_references)
+        report = f"{body}\n\n{references_text}".strip()
+        
+        logger.info(f"研究报告生成完成，长度: {len(report)} 字符")
+        return report
     
     def _build_research_context(
         self, 
@@ -188,47 +183,6 @@ class ResearchAgent(BaseAgent):
             if not append_block("\n".join(fragment_lines)):
                 return "\n\n".join(context_parts)
 
-        use_fallback_material = not structured_context and len(selected_contexts) < 3
-
-        if use_fallback_material and search_results:
-            search_lines = ["## 搜索结果摘要"]
-            for i, result in enumerate(search_results[:6], 1):
-                try:
-                    if hasattr(result, 'title'):
-                        ref_num = source_mapping.get(result.url)
-                        title_line = f"**来源[^{ref_num}]: {result.title}**" if ref_num else f"**来源: {result.title}**"
-                        search_lines.append(title_line)
-                        if hasattr(result, 'snippet') and result.snippet:
-                            search_lines.append(f"   摘要: {self._truncate_text(result.snippet, 280)}")
-                    else:
-                        search_lines.append(f"{i}. {self._truncate_text(str(result), 280)}")
-                except Exception as e:
-                    logger.warning(f"处理搜索结果 {i} 时出错: {e}")
-                    search_lines.append(f"{i}. [处理错误的搜索结果]")
-            if not append_block("\n".join(search_lines)):
-                return "\n\n".join(context_parts)
-        
-        if use_fallback_material and content_results:
-            successful_content = [r for r in content_results if hasattr(r, 'success') and r.success and hasattr(r, 'content') and r.content]
-            if successful_content:
-                content_lines = ["## 补充网页内容"]
-                for i, result in enumerate(successful_content[:4], 1):
-                    try:
-                        title = getattr(result, 'title', '未知标题')
-                        url = getattr(result, 'url', '未知URL')
-                        content = getattr(result, 'content', '')
-
-                        ref_num = source_mapping.get(url)
-                        title_line = f"### 来源[^{ref_num}]: {title}" if ref_num else f"### 来源: {title}"
-                        content_lines.append(title_line)
-
-                        if content:
-                            content_lines.append(f"内容: {self._truncate_text(content, 900)}")
-                    except Exception as e:
-                        logger.warning(f"处理内容结果 {i} 时出错: {e}")
-                        content_lines.append(f"### 来源 {i}: [处理错误的内容结果]")
-                append_block("\n".join(content_lines))
-        
         return "\n\n".join(context_parts)
     
     async def _generate_outline(self, question: str, context: str) -> str:

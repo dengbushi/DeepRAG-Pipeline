@@ -87,12 +87,18 @@ class RetrieverManager:
 
     async def search(self, query: str, max_results: int) -> List[UnifiedSearchResult]:
         all_results: List[UnifiedSearchResult] = []
+        errors: List[Exception] = []
+        if not self.retrievers:
+            raise RuntimeError("没有可用的检索器")
         for retriever in self.retrievers:
             try:
                 results = await retriever.search(query, max_results=max_results)
                 all_results.extend(results)
             except Exception as e:
+                errors.append(e)
                 logger.warning(f"Retriever {retriever.name} 搜索失败: {e}")
+        if errors and not all_results:
+            raise RuntimeError("所有检索器搜索失败") from errors[0]
         return self._deduplicate(all_results)
 
     def list_retrievers(self) -> List[str]:
@@ -135,8 +141,5 @@ def build_retriever_manager(search_config: Dict[str, Any], serper_engine: Option
                 retrievers.append(SerperScholarRetriever(serper_engine))
         else:
             logger.warning(f"未知 retriever: {name}")
-
-    if not retrievers and serper_engine:
-        retrievers.append(SerperWebRetriever(serper_engine))
 
     return RetrieverManager(retrievers)

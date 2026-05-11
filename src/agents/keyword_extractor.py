@@ -41,23 +41,16 @@ class KeywordExtractorAgent(BaseAgent):
         
         messages = self.create_messages(input_data)
         
-        try:
-            keywords = await self.invoke_llm(messages, **kwargs)
-            
-            # 清理和验证关键词
-            cleaned_keywords = self.clean_keywords(keywords)
-            
-            if not cleaned_keywords:
-                logger.warning("未提取到有效关键词，使用原始输入")
-                return input_data
-            
-            logger.info(f"关键词提取完成: {cleaned_keywords}")
-            return cleaned_keywords
-            
-        except Exception as e:
-            logger.error(f"关键词提取失败: {e}")
-            # 降级处理：简单分词
-            return self.simple_keyword_extraction(input_data)
+        keywords = await self.invoke_llm(messages, **kwargs)
+        
+        # 清理和验证关键词
+        cleaned_keywords = self.clean_keywords(keywords)
+        
+        if not cleaned_keywords:
+            raise ValueError("未提取到有效关键词")
+        
+        logger.info(f"关键词提取完成: {cleaned_keywords}")
+        return cleaned_keywords
     
     def clean_keywords(self, keywords: str) -> str:
         """清理关键词"""
@@ -81,17 +74,3 @@ class KeywordExtractorAgent(BaseAgent):
         
         return ' '.join(filtered_keywords)
     
-    def simple_keyword_extraction(self, text: str) -> str:
-        """简单关键词提取（降级方案）"""
-        logger.info("使用简单关键词提取")
-        
-        # 移除标点符号
-        text = re.sub(r'[^\w\s]', ' ', text)
-        words = text.split()
-        
-        # 过滤短词和停用词
-        stop_words = {'的', '是', '在', '有', '和', '与', '或', '但', '请问', '什么', '如何', '为什么'}
-        keywords = [word for word in words if len(word) > 1 and word not in stop_words]
-        
-        # 取前3个词
-        return ' '.join(keywords[:3]) if keywords else text

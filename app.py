@@ -21,8 +21,6 @@ def run_web_server(host='127.0.0.1', port=5000, debug=False):
     
     print(f"🚀 启动Web服务器...")
     print(f"📍 访问地址: http://{host}:{port}")
-    print(f"🎯 聊天页面: http://{host}:{port}/chat")
-    print(f"⚙️ 管理页面: http://{host}:{port}/admin")
     print(f"🔧 调试模式: {'开启' if debug else '关闭'}")
     print("-" * 50)
     

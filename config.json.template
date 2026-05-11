@@ -3,22 +3,22 @@
     "provider": "deepseek",
     "api_key": "YOUR_DEEPSEEK_API_KEY_HERE",
     "base_url": "https://api.deepseek.com/v1",
-    "model_name": "deepseek-chat",
-    "max_tokens": 8192,
-    "temperature": 0.3,
+    "model_name": "deepseek-v4-pro",
+    "max_tokens": 393216,
+    "temperature": 0.2,
     "timeout": 120
   },
   "search": {
     "engine": "deep_search",
     "serper_api_key": "YOUR_SERPER_API_KEY_HERE",
-    "max_results_per_query": 15,
+    "max_results": 10,
     "max_rounds": 8,
-    "max_total_queries": 12,
-    "max_urls_to_scrape_per_query": 10,
-    "token_budget": 80000,
-    "report_context_max_chars": 12000,
-    "evidence_similarity_threshold": 0.35,
-    "allow_early_termination": true
+    "max_urls_per_step": 10,
+    "token_budget": 600000,
+    "allow_early_termination": true,
+    "context_top_k": 40,
+    "context_max_chars": 250000,
+    "report_context_max_chars": 400000
   },
   "cache": {
     "enabled": true,

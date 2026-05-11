@@ -5,7 +5,7 @@ Flask Web应用 - 简化版
 """
 
 import logging
-from flask import Flask, render_template, jsonify, redirect
+from flask import Flask, render_template, jsonify
 from flask_cors import CORS
 from .api import api_bp
 
@@ -29,12 +29,7 @@ def create_app():
     
     @app.route('/')
     def index():
-        """主页 - 直接跳转到聊天"""
-        return redirect('/chat')
-    
-    @app.route('/chat')
-    def chat():
-        """聊天页面"""
+        """主页"""
         return render_template('chat.html')
     
     @app.errorhandler(404)
@@ -46,7 +41,7 @@ def create_app():
         return jsonify({'error': '服务器内部错误'}), 500
     
     logger.info("="*50)
-    logger.info("DeepRAG Pipeline Web服务器")
+    logger.info("面向报告生成的多智能体协作系统 Web服务器")
     logger.info("="*50)
     
     return app

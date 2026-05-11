@@ -39,21 +39,14 @@ class QuestionExtractorAgent(BaseAgent):
         
         messages = self.create_messages(input_data)
         
-        try:
-            extracted_question = await self.invoke_llm(messages, **kwargs)
-            
-            # 简单验证提取的问题
-            if not extracted_question or len(extracted_question.strip()) < 3:
-                logger.warning("提取的问题过短，使用原始输入")
-                return input_data
-            
-            logger.info(f"问题提取完成: {extracted_question}")
-            return extracted_question
-            
-        except Exception as e:
-            logger.error(f"问题提取失败: {e}")
-            # 降级处理：返回原始输入
-            return input_data
+        extracted_question = await self.invoke_llm(messages, **kwargs)
+        
+        # 简单验证提取的问题
+        if not extracted_question or len(extracted_question.strip()) < 3:
+            raise ValueError("提取的问题过短")
+        
+        logger.info(f"问题提取完成: {extracted_question}")
+        return extracted_question
     
     def validate_question(self, question: str) -> bool:
         """验证问题质量"""
