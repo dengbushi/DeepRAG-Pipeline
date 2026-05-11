@@ -180,10 +180,7 @@ class ResearchNodes:
         )
         
         high_quality_count = self.context_manager.count_high_quality_contexts(selected_contexts)
-        report_ready = (
-            high_quality_count >= min(4, self.context_top_k)
-            or len(state.get("search_history", [])) >= state.get("max_total_queries", self.max_total_queries)
-        )
+        report_ready = len(state.get("completed_queries", []) + gather_queries) >= state.get("max_total_queries", self.max_total_queries)
         return {
             "content_results": content_results,
             "source_registry": self._build_source_entries(successful_results, source_type="content", query=state.get("current_question", state.get("original_query", ""))),
@@ -296,7 +293,7 @@ class ResearchNodes:
         return {
             "step_questions": state.get("step_questions", []) + new_steps,
             "early_termination": early_termination,
-            "report_ready": state.get("report_ready", False) or evidence_ready or (latest_evidence_count == 0 and len(new_steps) == 0),
+            "report_ready": state.get("report_ready", False) or early_termination or (evidence_ready and len(new_steps) == 0) or (latest_evidence_count == 0 and len(new_steps) == 0),
             "steps_log": [step_log],
             "events": [self._event("planning_completed", state, {"planned_queries": new_steps, "early_termination": early_termination, "remaining_budget": remaining_budget})],
         }
@@ -411,8 +408,13 @@ class ResearchNodes:
             if item.get("url") and item.get("number")
         }
         evidence_budget = state.get("report_context_max_chars", self.report_context_max_chars)
+        evidence_query = " ".join([
+            state.get("extracted_question", state.get("original_query", "")),
+            state.get("keywords", ""),
+            " ".join(state.get("search_history", [])),
+        ]).strip()
         selected_evidence = self.context_manager.select_context_with_budget(
-            query=state.get("extracted_question", state.get("original_query", "")),
+            query=evidence_query,
             contexts=state.get("selected_contexts", []),
             max_chars=evidence_budget,
             max_chunks=self.context_top_k,
@@ -462,21 +464,14 @@ class ResearchNodes:
 
     def _has_sufficient_evidence(self, contexts: List[Any], report_context_max_chars: int) -> bool:
         high_quality_count = self.context_manager.count_high_quality_contexts(contexts)
-        if high_quality_count >= min(4, self.context_top_k):
-            return True
-        total_chars = 0
-        qualified = 0
+        source_urls = set()
         for item in contexts:
-            score = float(item.get("score", 0.0)) if isinstance(item, dict) else getattr(item, "score", 0.0)
-            if score < self.evidence_similarity_threshold:
-                continue
-            text = item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
-            estimated = len(text or "")
-            if total_chars + estimated > report_context_max_chars:
-                break
-            total_chars += estimated
-            qualified += 1
-        return qualified >= min(3, self.context_top_k)
+            source_url = item.get("source_url", "") if isinstance(item, dict) else getattr(item, "source_url", "")
+            if source_url:
+                source_urls.add(source_url)
+        if high_quality_count >= 10 and len(source_urls) >= 8:
+            return True
+        return False
 
     def _build_source_entries(self, items: List[Any], source_type: str, query: str) -> List[dict]:
         entries: List[dict] = []

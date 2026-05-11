@@ -5,10 +5,13 @@ Web API接口 - 简化版
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
+import uuid
 from flask import Blueprint, request, jsonify, Response, stream_with_context
+from ..config import reset_log_request_id, set_log_request_id
 from ..rag.pipeline import RAGResult
 from ..rag.system import rag_system
 
@@ -142,20 +145,24 @@ def ask_question_stream():
         return jsonify({'success': False, 'error': '问题不能为空'}), 400
 
     use_cache = parse_bool(request.args.get('use_cache'), True)
+    request_id = uuid.uuid4().hex[:8]
 
     async def stream_async():
         start_time = time.time()
         await rag_system.initialize()
+        logger.info(f"SSE研究请求开始: {question}")
 
         if use_cache and rag_system.cache:
             cached_result = rag_system.cache.get_by_namespace("answer", question)
             if cached_result:
+                logger.info("SSE研究请求命中缓存")
                 cached_result.cached = True
                 cached_result.processing_time = time.time() - start_time
                 yield sse_event("started", {"question": question, "cached": True})
                 cached_data = cached_result.to_dict()
                 completed = completed_stages_from_state(cached_data)
                 yield sse_event("stage", {"active": "", "completed": completed})
+                logger.info(f"SSE研究请求完成，耗时: {cached_result.processing_time:.2f}s")
                 yield sse_event("final", {"data": cached_result.to_dict()})
                 return
 
@@ -214,16 +221,19 @@ def ask_question_stream():
         result = result_from_state(question, final_state, processing_time)
         if use_cache and rag_system.cache:
             rag_system.cache.set_by_namespace("answer", question, result)
+        logger.info(f"SSE研究请求完成，耗时: {processing_time:.2f}s")
         yield sse_event("final", {"data": result.to_dict()})
 
     def stream_sync():
+        token = set_log_request_id(request_id)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         generator = stream_async()
+        context = contextvars.copy_context()
         try:
             while True:
                 try:
-                    yield loop.run_until_complete(generator.__anext__())
+                    yield context.run(loop.run_until_complete, generator.__anext__())
                 except StopAsyncIteration:
                     break
         except (GeneratorExit, BrokenPipeError, ConnectionResetError):
@@ -233,15 +243,16 @@ def ask_question_stream():
             yield sse_event("failed", {"error": str(e)})
         finally:
             try:
-                loop.run_until_complete(generator.aclose())
+                context.run(loop.run_until_complete, generator.aclose())
                 pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
                 for task in pending:
                     task.cancel()
                 if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.run_until_complete(loop.shutdown_asyncgens())
+                    context.run(loop.run_until_complete, asyncio.gather(*pending, return_exceptions=True))
+                context.run(loop.run_until_complete, loop.shutdown_asyncgens())
             finally:
                 loop.close()
+                reset_log_request_id(token)
 
     return Response(
         stream_with_context(stream_sync()),

@@ -180,49 +180,59 @@
             question,
             use_cache: document.getElementById('useCache').checked ? 'true' : 'false'
         });
-        activeEventSource = new EventSource(`/api/ask/stream?${params.toString()}`);
+        const source = new EventSource(`/api/ask/stream?${params.toString()}`);
+        let streamSettled = false;
+        activeEventSource = source;
 
-        activeEventSource.addEventListener('started', (event) => {
+        function finishCurrentStream() {
+            if (streamSettled) return;
+            streamSettled = true;
+            if (activeEventSource === source) {
+                source.close();
+                activeEventSource = null;
+            }
+            button.disabled = false;
+            button.innerHTML = original;
+        }
+
+        source.addEventListener('started', (event) => {
+            if (activeEventSource !== source) return;
             const data = JSON.parse(event.data);
             addActivity('running', '研究流已连接', '/api/ask/stream', data.cached ? '命中缓存，正在加载报告。' : '后端会按 LangGraph 节点推送进度。');
         });
 
-        activeEventSource.addEventListener('stage', (event) => {
+        source.addEventListener('stage', (event) => {
+            if (activeEventSource !== source) return;
             const data = JSON.parse(event.data);
             renderStages(data.active || null, data.completed || []);
         });
 
-        activeEventSource.addEventListener('activity', (event) => {
+        source.addEventListener('activity', (event) => {
+            if (activeEventSource !== source) return;
             const data = JSON.parse(event.data);
             if (data.type === 'step') renderStep(data.step || {});
             else addActivity(data.type || 'info', data.title || '事件', data.primary || '', data.detail || '');
         });
 
-        activeEventSource.addEventListener('final', (event) => {
+        source.addEventListener('final', (event) => {
+            if (activeEventSource !== source) return;
             const data = JSON.parse(event.data);
             renderResult(data.data);
-            finishStream(button, original);
+            finishCurrentStream();
         });
 
-        activeEventSource.addEventListener('failed', (event) => {
+        source.addEventListener('failed', (event) => {
+            if (activeEventSource !== source) return;
             const data = JSON.parse(event.data);
             renderFailure(data.error || '研究请求失败');
-            finishStream(button, original);
+            finishCurrentStream();
         });
 
-        activeEventSource.onerror = () => {
+        source.onerror = () => {
+            if (streamSettled || activeEventSource !== source) return;
             renderFailure('研究进度流连接中断');
-            finishStream(button, original);
+            finishCurrentStream();
         };
-    }
-
-    function finishStream(button, original) {
-        if (activeEventSource) {
-            activeEventSource.close();
-            activeEventSource = null;
-        }
-        button.disabled = false;
-        button.innerHTML = original;
     }
 
     window.addEventListener('beforeunload', () => {
@@ -260,25 +270,31 @@
 
     function renderResult(data) {
         stopClock(data.processing_time);
+        const report = getReportText(data);
         document.getElementById('runState').textContent = data.success === false ? 'Failed' : 'Complete';
         document.getElementById('reportTitle').textContent = data.extracted_question || data.question || '研究报告';
         renderStages(null, inferCompletedStages(data));
         renderActivities(data);
         renderSources(data);
-        renderReport(data.answer || '');
+        renderReport(report);
         if (document.getElementById('showTrace').checked) addActivity('trace', '原始轨迹', 'observability_events', JSON.stringify(data.observability_events || [], null, 2));
     }
 
     function inferCompletedStages(data) {
+        const report = getReportText(data);
         const completed = [];
         if (data.extracted_question || data.question) completed.push('extract');
         if (data.keywords) completed.push('keywords');
         if ((data.search_results || []).length || (data.steps_log || []).some(step => step.action === 'search')) completed.push('search');
         if ((data.content_results || []).length || (data.steps_log || []).some(step => step.action === 'visit')) completed.push('visit');
         if ((data.steps_log || []).some(step => step.action === 'reflect')) completed.push('reflect');
-        else if (data.answer && completed.includes('visit')) completed.push('reflect');
-        if (data.answer) completed.push('answer');
+        else if (report && completed.includes('visit')) completed.push('reflect');
+        if (report) completed.push('answer');
         return completed;
+    }
+
+    function getReportText(data) {
+        return data.answer || data.final_answer || '';
     }
 
     function renderActivities(data) {

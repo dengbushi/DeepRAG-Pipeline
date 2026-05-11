@@ -102,6 +102,7 @@ class ResearchAgent(BaseAgent):
         body = await self._generate_body(question, outline, context)
         body = self._strip_reference_section(body)
         used_references = self._select_used_references(body, references)
+        body, used_references = self._renumber_references(body, used_references)
         references_text = self._build_reference_section(used_references)
         report = f"{body}\n\n{references_text}".strip()
         
@@ -269,6 +270,26 @@ class ResearchAgent(BaseAgent):
         if not used_numbers:
             return references[: min(8, len(references))]
         return [ref for ref in references if ref.get('number') in used_numbers]
+
+    def _renumber_references(self, body: str, references: List[Dict[str, Any]]) -> tuple[str, List[Dict[str, Any]]]:
+        number_mapping = {
+            ref.get('number'): index
+            for index, ref in enumerate(references, 1)
+            if ref.get('number')
+        }
+
+        def replace_reference(match):
+            old_number = int(match.group(1))
+            new_number = number_mapping.get(old_number)
+            return f"[^{new_number}]" if new_number else match.group(0)
+
+        renumbered_body = re.sub(r"\[\^(\d+)\]", replace_reference, body or "")
+        renumbered_references = []
+        for index, ref in enumerate(references, 1):
+            renumbered = dict(ref)
+            renumbered['number'] = index
+            renumbered_references.append(renumbered)
+        return renumbered_body, renumbered_references
 
     def _extract_reference_numbers(self, body: str) -> List[int]:
         found = []

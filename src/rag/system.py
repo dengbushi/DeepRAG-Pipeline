@@ -6,6 +6,7 @@ RAG系统主类 - LangGraph版本
 
 import logging
 import asyncio
+import threading
 from typing import Dict, Any, Optional, List
 from ..config import AppConfig, config_manager
 from ..llm.factory import LLMFactory
@@ -34,6 +35,10 @@ class RAGSystem:
         self.pipeline = None
         
         self._initialized = False
+        self._init_lock = threading.Lock()
+        self._initializing = False
+        self._init_event = threading.Event()
+        self._init_event.set()
         
         logger.info("RAG系统创建完成 (LangGraph)")
     
@@ -42,6 +47,24 @@ class RAGSystem:
         if self._initialized:
             logger.warning("系统已经初始化")
             return
+        
+        should_initialize = False
+        with self._init_lock:
+            if self._initialized:
+                logger.warning("系统已经初始化")
+                return
+            if self._initializing:
+                logger.info("系统正在初始化，等待完成")
+            else:
+                self._initializing = True
+                self._init_event.clear()
+                should_initialize = True
+        
+        if not should_initialize:
+            await asyncio.to_thread(self._init_event.wait)
+            if self._initialized:
+                return
+            raise RuntimeError("RAG系统初始化失败")
         
         try:
             logger.info("开始初始化RAG系统 (LangGraph)...")
@@ -96,12 +119,17 @@ class RAGSystem:
             )
             logger.info("RAG管道初始化完成")
             
-            self._initialized = True
+            with self._init_lock:
+                self._initialized = True
             logger.info("RAG系统初始化完成 (LangGraph)")
             
         except Exception as e:
             logger.error(f"RAG系统初始化失败: {e}")
             raise
+        finally:
+            with self._init_lock:
+                self._initializing = False
+                self._init_event.set()
     
     async def ask(
         self, 

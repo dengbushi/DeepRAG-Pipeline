@@ -29,7 +29,7 @@ class KeywordExtractorAgent(BaseAgent):
                 "1. 只返回关键词，用空格分隔\n"
                 "2. 选择最重要和最具搜索价值的词汇\n"
                 "3. 避免停用词（如：的、是、在、等）\n"
-                "4. 关键词数量控制在2-5个\n"
+                "4. 关键词数量控制在2-10个\n"
                 "5. 优先选择名词、专有名词和核心概念"
             ),
             **kwargs
@@ -69,8 +69,8 @@ class KeywordExtractorAgent(BaseAgent):
         filtered_keywords = [kw for kw in keyword_list if kw not in stop_words and len(kw) > 1]
         
         # 限制关键词数量
-        if len(filtered_keywords) > 5:
-            filtered_keywords = filtered_keywords[:5]
+        if len(filtered_keywords) > 10:
+            filtered_keywords = filtered_keywords[:10]
         
         return ' '.join(filtered_keywords)
     

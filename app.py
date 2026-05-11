@@ -65,6 +65,7 @@ def main():
     if args.config:
         config_manager.config_file = Path(args.config)
         config_manager.config = config_manager._load_config()
+        config_manager._setup_logging()
     
     # 更新调试配置
     if args.debug:

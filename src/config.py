@@ -8,9 +8,23 @@
 import os
 import json
 import logging
+import contextvars
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict, field, fields
+
+_log_request_id = contextvars.ContextVar("log_request_id", default="-")
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = _log_request_id.get("-")
+        return True
+
+def set_log_request_id(request_id: str):
+    return _log_request_id.set(request_id or "-")
+
+def reset_log_request_id(token):
+    _log_request_id.reset(token)
 
 @dataclass
 class LLMConfig:
@@ -61,7 +75,7 @@ class CacheConfig:
 class LogConfig:
     """日志配置"""
     level: str = "INFO"
-    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format: str = "%(asctime)s - %(request_id)s - %(name)s - %(levelname)s - %(message)s"
     file: Optional[str] = "logs/rag_system.log"
 
 @dataclass
@@ -191,10 +205,11 @@ class ConfigManager:
     def _setup_logging(self):
         """设置日志 - 直接操作 root logger 避免 basicConfig 的限制"""
         log_config = self.config.log
+        log_file = str(Path(log_config.file).resolve()) if log_config.file else None
         
         # 创建日志目录
-        if log_config.file:
-            log_path = Path(log_config.file)
+        if log_file:
+            log_path = Path(log_file)
             log_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 获取 root logger
@@ -209,20 +224,39 @@ class ConfigManager:
         # 检查是否已有相同类型的 handler，避免重复添加
         has_console_handler = any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) 
                                   for h in root_logger.handlers)
-        has_file_handler = any(isinstance(h, logging.FileHandler) 
-                               for h in root_logger.handlers)
         
         # 添加控制台 handler（如果还没有）
         if not has_console_handler:
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(formatter)
             root_logger.addHandler(console_handler)
+        else:
+            for handler in root_logger.handlers:
+                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                    handler.setFormatter(formatter)
         
         # 添加文件 handler（如果还没有且配置了文件路径）
-        if not has_file_handler and log_config.file:
-            file_handler = logging.FileHandler(log_config.file, encoding='utf-8')
+        for handler in list(root_logger.handlers):
+            if isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', None) != log_file:
+                root_logger.removeHandler(handler)
+                handler.close()
+        
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == log_file
+            for h in root_logger.handlers
+        )
+        if log_file and not has_file_handler:
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
             file_handler.setFormatter(formatter)
             root_logger.addHandler(file_handler)
+        else:
+            for handler in root_logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.setFormatter(formatter)
+
+        for handler in root_logger.handlers:
+            if not any(isinstance(item, RequestIdFilter) for item in handler.filters):
+                handler.addFilter(RequestIdFilter())
     
     def save_config(self, config_file: Optional[str] = None):
         """保存配置到文件"""
@@ -242,6 +276,7 @@ class ConfigManager:
         current_dict = self.config.to_dict()
         current_dict.update(updates)
         self.config = AppConfig.from_dict(current_dict)
+        self._setup_logging()
         logging.info("配置已更新")
 
 # 全局配置实例
