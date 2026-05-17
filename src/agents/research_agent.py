@@ -154,7 +154,7 @@ class ResearchAgent(BaseAgent):
             current_length = max_chars
             return False
 
-        compact_references = references[: min(len(references), 12)]
+        compact_references = references[: min(len(references), 30)]
         if references and len(references) > len(compact_references):
             logger.info(f"来源较多，压缩来源索引展示: {len(compact_references)}/{len(references)}")
         

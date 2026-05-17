@@ -32,8 +32,7 @@ class QueryPlannerAgent(BaseAgent):
             "\n1. 查询必须互补，避免重复"
             "\n2. 应优先覆盖证据缺口"
             "\n3. 适合搜索引擎检索"
-            "\n4. 必须检查原始问题中的专有名词、英文术语和枚举项是否已覆盖；如未覆盖，优先生成对应查询"
-            "\n5. 如果信息已经充分，直接返回 []"
+            "\n4. 如果信息已经充分，直接返回 []"
         )
         messages = self.create_messages(prompt)
         response = await self.invoke_llm(messages, temperature=0.2)
